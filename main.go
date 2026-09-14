@@ -2,42 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 const base62Chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-
-// Store holds the URL mappings in memory.
-// A real system would swap this for a database (that's a later project milestone).
-type Store struct {
-	mu      sync.RWMutex
-	urls    map[string]string // short code -> long URL
-	counter uint64
-}
-
-func NewStore() *Store {
-	return &Store{urls: make(map[string]string)}
-}
-
-// Save assigns the next counter value a short code and stores the mapping.
-func (s *Store) Save(longURL string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.counter++
-	code := encodeBase62(s.counter)
-	s.urls[code] = longURL
-	return code
-}
-
-func (s *Store) Get(code string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	longURL, ok := s.urls[code]
-	return longURL, ok
-}
 
 // encodeBase62 turns a counter into a short, URL-safe string.
 // e.g. 1 -> "1", 62 -> "10", 125 -> "21"
@@ -60,6 +31,19 @@ func encodeBase62(n uint64) string {
 	return string(runes)
 }
 
+// decodeBase62 reverses encodeBase62, turning a short code back into its counter value.
+func decodeBase62(s string) (uint64, error) {
+	var n uint64
+	for _, c := range s {
+		idx := strings.IndexRune(base62Chars, c)
+		if idx == -1 {
+			return 0, fmt.Errorf("invalid character %q in code", c)
+		}
+		n = n*62 + uint64(idx)
+	}
+	return n, nil
+}
+
 type shortenRequest struct {
 	URL string `json:"url"`
 }
@@ -70,7 +54,11 @@ type shortenResponse struct {
 }
 
 func main() {
-	store := NewStore()
+	store, err := NewSQLiteStore("urlshortener.db")
+	if err != nil {
+		log.Fatalf("opening store: %v", err)
+	}
+	defer store.Close()
 
 	mux := http.NewServeMux()
 
@@ -85,7 +73,13 @@ func main() {
 			return
 		}
 
-		code := store.Save(req.URL)
+		code, err := store.Save(req.URL)
+		if err != nil {
+			log.Printf("save error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
 		resp := shortenResponse{
 			ShortCode: code,
 			ShortURL:  "http://localhost:8080/" + code,
@@ -97,8 +91,13 @@ func main() {
 
 	mux.HandleFunc("GET /{code}", func(w http.ResponseWriter, r *http.Request) {
 		code := r.PathValue("code")
-		longURL, ok := store.Get(code)
-		if !ok {
+		longURL, found, err := store.Get(code)
+		if err != nil {
+			log.Printf("get error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if !found {
 			http.NotFound(w, r)
 			return
 		}

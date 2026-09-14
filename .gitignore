@@ -1,6 +1,9 @@
 # Compiled binary
 urlshortener
 
+# SQLite database (runtime data, not source)
+*.db
+
 # OS/editor cruft
 .DS_Store
 .vscode/
