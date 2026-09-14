@@ -1,0 +1,6 @@
+# Compiled binary
+urlshortener
+
+# OS/editor cruft
+.DS_Store
+.vscode/
